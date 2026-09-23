@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { forwardRef, memo, useCallback, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -59,12 +59,13 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
   ref,
 ) {
   const list = useRef<FlatList<number>>(null);
+  const strip = useRef<View>(null);
   const [stripWidth, setStripWidth] = useState(0);
-  // The strip scrolls for two reasons: following the pager (we asked for an
-  // exact offset) or the user scrubbing it. Anything that isn't the offset we
-  // asked for counts as scrubbing until the strip has been still for a moment.
-  const expectedOffset = useRef(index * TICK);
+  // The strip scrolls either because it follows the pager or because the user
+  // is scrubbing it. Only a real touch (or wheel, on web) counts as scrubbing;
+  // it lasts until the finger is up and the strip has stopped moving.
   const scrubbing = useRef(false);
+  const touching = useRef(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastIndex = useRef(index);
   if (!scrubbing.current) lastIndex.current = index;
@@ -72,23 +73,47 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
   useImperativeHandle(ref, () => ({
     follow: (i) => {
       if (scrubbing.current) return;
-      expectedOffset.current = i * TICK;
       list.current?.scrollToOffset({ offset: i * TICK, animated: false });
     },
   }));
 
+  const armIdle = useCallback(() => {
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => {
+      if (touching.current) return;
+      scrubbing.current = false;
+      // Rest exactly on the chosen day.
+      list.current?.scrollToOffset({ offset: lastIndex.current * TICK, animated: true });
+    }, 200);
+  }, []);
+
+  const beginScrub = useCallback(() => {
+    scrubbing.current = true;
+    armIdle();
+  }, [armIdle]);
+
+  const onTouchStart = () => {
+    touching.current = true;
+    beginScrub();
+  };
+  const onTouchEnd = () => {
+    touching.current = false;
+    armIdle();
+  };
+
+  // Mouse wheels and trackpads scroll without any touch events.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const el = strip.current as unknown as HTMLElement | null;
+    el?.addEventListener('wheel', beginScrub, { passive: true });
+    return () => el?.removeEventListener('wheel', beginScrub);
+  }, [beginScrub, stripWidth]);
+
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!scrubbing.current) return;
+      armIdle();
       const x = e.nativeEvent.contentOffset.x;
-      if (!scrubbing.current && Math.abs(x - expectedOffset.current) < 1) return;
-
-      scrubbing.current = true;
-      if (idleTimer.current) clearTimeout(idleTimer.current);
-      idleTimer.current = setTimeout(() => {
-        scrubbing.current = false;
-        expectedOffset.current = lastIndex.current * TICK;
-      }, 180);
-
       const i = Math.max(0, Math.min(DAY_COUNT - 1, Math.round(x / TICK)));
       if (i !== lastIndex.current) {
         lastIndex.current = i;
@@ -96,7 +121,7 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
         onScrub(i);
       }
     },
-    [onScrub],
+    [onScrub, armIdle],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setStripWidth(e.nativeEvent.layout.width);
@@ -108,7 +133,14 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
       <Text style={[styles.label, date.getDay() === 0 && styles.sundayLabel]}>
         {weekdayName(date).slice(0, 3)} · {shortMonth(date)} {date.getDate()}, {date.getFullYear()}
       </Text>
-      <View style={styles.strip} onLayout={onLayout}>
+      <View
+        ref={strip}
+        style={styles.strip}
+        onLayout={onLayout}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
+      >
         {stripWidth > 0 && (
           <FlatList
             ref={list}
@@ -124,6 +156,7 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
             snapToInterval={TICK}
             decelerationRate="fast"
             onScroll={onScroll}
+            onScrollBeginDrag={beginScrub}
             scrollEventThrottle={16}
             initialNumToRender={60}
             windowSize={9}

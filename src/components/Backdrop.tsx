@@ -6,7 +6,7 @@ import { StyleSheet, View } from 'react-native';
 /** Colourful wallpaper for the glass to refract. */
 export function Backdrop({ targetRef }: { targetRef: RefObject<View | null> }) {
   return (
-    <BlurTargetView ref={targetRef} style={StyleSheet.absoluteFill}>
+    <BlurTargetView ref={targetRef} style={[StyleSheet.absoluteFill, styles.clip]}>
       <LinearGradient
         colors={['#1b1440', '#2d1b69', '#0f3b5c']}
         start={{ x: 0, y: 0 }}
@@ -22,6 +22,8 @@ export function Backdrop({ targetRef }: { targetRef: RefObject<View | null> }) {
 }
 
 const styles = StyleSheet.create({
+  // The blobs hang off the edges; without clipping they widen the page on web.
+  clip: { overflow: 'hidden' },
   blob: { position: 'absolute', width: 300, height: 300, borderRadius: 150, opacity: 0.55 },
   blobSmall: { position: 'absolute', width: 140, height: 140, borderRadius: 70, opacity: 0.5 },
 });

@@ -1,6 +1,6 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -68,12 +68,16 @@ export default function App() {
 }
 
 function CardsScreen() {
-  const { width } = useWindowDimensions();
+  const screen = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { notes, setNote } = useNotes();
 
   const [index, setIndex] = useState(TODAY_INDEX);
-  const [pagerHeight, setPagerHeight] = useState(0);
+  const [pagerSize, setPagerSize] = useState<{ width: number; height: number } | null>(null);
+  // Cards are exactly as wide as the pager, which can differ from the window
+  // (e.g. inside a frame), so measure it rather than trusting the window.
+  const width = pagerSize?.width || screen.width;
+  const pagerHeight = pagerSize?.height ?? 0;
   const [editing, setEditing] = useState<Editing>(null);
   const [pendingCaret, setPendingCaret] = useState<{ day: string; sel: Selection } | null>(null);
   const [, setHistoryVersion] = useState(0);
@@ -203,12 +207,42 @@ function CardsScreen() {
     if (cur && cur.day !== day) inputs.current.get(day)?.[cur.field]?.focus();
   }, []);
 
+  // On web, react-native-web pages with CSS scroll-snap, which Safari keeps
+  // re-snapping as virtualized cards mount and unmount, so the pager runs
+  // away. There we page by hand instead: once the scroll comes to rest and no
+  // finger is down, glide to the nearest card.
+  const pagerX = useRef(0);
+  const pagerTouching = useRef(false);
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const snapToNearestPage = useCallback(() => {
+    if (snapTimer.current) clearTimeout(snapTimer.current);
+    snapTimer.current = setTimeout(() => {
+      if (pagerTouching.current) return;
+      const nearest = Math.round(pagerX.current / width);
+      if (Math.abs(pagerX.current - nearest * width) > 1) {
+        pager.current?.scrollToOffset({ offset: nearest * width, animated: true });
+      }
+    }, 120);
+  }, [width]);
+
   const onPagerScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const page = e.nativeEvent.contentOffset.x / width;
+    const x = e.nativeEvent.contentOffset.x;
+    pagerX.current = x;
+    const page = x / width;
     scrubber.current?.follow(page);
-    // Web has no momentum events, so also settle whenever a page lines up.
+    // Web has no momentum events, so settle whenever a page lines up.
     const nearest = Math.round(page);
     if (Math.abs(page - nearest) < 0.01 && nearest !== indexRef.current) settleOn(nearest);
+    if (Platform.OS === 'web') snapToNearestPage();
+  };
+
+  const onPagerTouchStart = () => {
+    pagerTouching.current = true;
+  };
+  const onPagerTouchEnd = () => {
+    pagerTouching.current = false;
+    if (Platform.OS === 'web') snapToNearestPage();
   };
 
   const onPagerSettle = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -223,6 +257,11 @@ function CardsScreen() {
     },
     [width],
   );
+
+  // Keep showing the same day if the card width changes (first measure, rotation).
+  useEffect(() => {
+    pager.current?.scrollToOffset({ offset: indexRef.current * width, animated: false });
+  }, [width]);
 
   const goToToday = () => {
     jumpTo(TODAY_INDEX);
@@ -283,12 +322,15 @@ function CardsScreen() {
         <FlatList
           ref={pager}
           style={styles.flex}
-          onLayout={(e) => setPagerHeight(e.nativeEvent.layout.height)}
+          onLayout={(e) => setPagerSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
           data={DAYS}
           horizontal
-          pagingEnabled
+          pagingEnabled={Platform.OS !== 'web'}
+          onTouchStart={onPagerTouchStart}
+          onTouchEnd={onPagerTouchEnd}
+          onTouchCancel={onPagerTouchEnd}
           keyExtractor={String}
-          extraData={[notes, pagerHeight, pendingCaret]}
+          extraData={[notes, pagerSize, pendingCaret]}
           renderItem={({ item }) => (
             <DayCard
               index={item}
