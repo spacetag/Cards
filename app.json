@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Glass Cards",
+    "slug": "glass-cards",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.spacetag.glasscards"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#2d1b69",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.spacetag.glasscards"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
