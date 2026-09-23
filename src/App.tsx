@@ -22,6 +22,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 
 import { Backdrop } from './components/Backdrop';
 import { DayCard, type CardInputs, type Field } from './components/DayCard';
+import { ExploreScreen } from './components/ExploreScreen';
 import { EditorToolbar, TOOLBAR_HEIGHT, type ToolbarAction } from './components/EditorToolbar';
 import { BlurTargetContext, Glass } from './components/Glass';
 import { Scrubber, type ScrubberHandle } from './components/Scrubber';
@@ -52,22 +53,29 @@ const BODY_OPS: Partial<Record<ToolbarAction, (e: Edit) => Edit>> = {
 
 type Editing = { day: string; field: Field } | null;
 
+type Mode = 'notes' | 'explore';
+
 export default function App() {
   const backdropRef = useRef<View>(null);
+  const [mode, setMode] = useState<Mode>('notes');
   return (
     <SafeAreaProvider>
       <KeyboardProvider>
         <BlurTargetContext.Provider value={backdropRef}>
           <StatusBar style="light" />
           <Backdrop targetRef={backdropRef} />
-          <CardsScreen />
+          {mode === 'notes' ? (
+            <CardsScreen onSwitchMode={() => setMode('explore')} />
+          ) : (
+            <ExploreScreen onSwitchMode={() => setMode('notes')} />
+          )}
         </BlurTargetContext.Provider>
       </KeyboardProvider>
     </SafeAreaProvider>
   );
 }
 
-function CardsScreen() {
+function CardsScreen({ onSwitchMode }: { onSwitchMode: () => void }) {
   const screen = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { notes, setNote } = useNotes();
@@ -308,14 +316,22 @@ function CardsScreen() {
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>{monthLabel}</Text>
-        {index !== TODAY_INDEX && (
-          <Pressable onPress={goToToday} accessibilityRole="button" accessibilityLabel="Go to today">
+        <View style={styles.headerButtons}>
+          {index !== TODAY_INDEX && (
+            <Pressable onPress={goToToday} accessibilityRole="button" accessibilityLabel="Go to today">
+              <Glass style={styles.todayPill} radius={18} interactive>
+                <MaterialCommunityIcons name="calendar-today" size={16} color="#fff" />
+                <Text style={styles.todayText}>Today</Text>
+              </Glass>
+            </Pressable>
+          )}
+          <Pressable onPress={onSwitchMode} accessibilityRole="button" accessibilityLabel="Explore National Geographic">
             <Glass style={styles.todayPill} radius={18} interactive>
-              <MaterialCommunityIcons name="calendar-today" size={16} color="#fff" />
-              <Text style={styles.todayText}>Today</Text>
+              <MaterialCommunityIcons name="compass-outline" size={16} color="#fff" />
+              <Text style={styles.todayText}>Explore</Text>
             </Glass>
           </Pressable>
-        )}
+        </View>
       </View>
 
       <KeyboardAvoidingView behavior="padding" style={styles.flex}>
@@ -391,6 +407,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  headerButtons: { flexDirection: 'row', gap: 8 },
   todayPill: {
     flexDirection: 'row',
     alignItems: 'center',
