@@ -1,6 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
+  Animated,
   FlatList,
   Platform,
   StyleSheet,
@@ -14,9 +15,13 @@ import {
 import { DAY_COUNT, dateForIndex, dayKey, shortMonth, weekdayName } from '../lib/dates';
 import { Glass } from './Glass';
 
-/** Width of one day in the scrubber strip. */
-export const TICK = 12;
-const STRIP_HEIGHT = 40;
+/** Distance from one mini card to the next. */
+export const PITCH = 26;
+const CARD_W = 20;
+const CARD_H = 30;
+/** How much the card under the centre grows, like the Photos scrubber. */
+const FOCUS_SCALE = 1.45;
+const STRIP_HEIGHT = CARD_H * FOCUS_SCALE + 6;
 
 export type ScrubberHandle = {
   /** Follow the pager without triggering onScrub. Accepts fractional indices. */
@@ -25,31 +30,73 @@ export type ScrubberHandle = {
 
 type Props = {
   index: number;
-  /** Day keys that have a note, shown as dots. */
+  /** Day keys that have a note; their mini cards look written on. */
   filledDays: Set<string>;
   onScrub: (index: number) => void;
 };
 
 const DAYS = Array.from({ length: DAY_COUNT }, (_, i) => i);
 
-const Tick = memo(function Tick({ index, filled }: { index: number; filled: boolean }) {
+/** Stable pseudo-random line lengths so each mini card looks a little different. */
+function lineWidths(index: number): number[] {
+  let seed = (index * 2654435761) >>> 0;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) >>> 0;
+    return 0.35 + ((seed >>> 16) % 1000) / 1600;
+  };
+  return [next(), next(), next()];
+}
+
+const MiniCard = memo(function MiniCard({
+  index,
+  filled,
+  scrollX,
+}: {
+  index: number;
+  filled: boolean;
+  scrollX: Animated.Value;
+}) {
   const date = dateForIndex(index);
-  const dow = date.getDay();
+  const sunday = date.getDay() === 0;
   const firstOfMonth = date.getDate() === 1;
+  const center = index * PITCH;
+  const range = [center - PITCH * 1.5, center - PITCH * 0.5, center, center + PITCH * 0.5, center + PITCH * 1.5];
+  const scale = scrollX.interpolate({
+    inputRange: range,
+    outputRange: [1, 1.12, FOCUS_SCALE, 1.12, 1],
+    extrapolate: 'clamp',
+  });
+  const opacity = scrollX.interpolate({
+    inputRange: range,
+    outputRange: [0.75, 0.85, 1, 0.85, 0.75],
+    extrapolate: 'clamp',
+  });
+
   return (
-    <View style={styles.tick}>
-      <View
+    <View style={styles.slot}>
+      <Animated.View
         style={[
-          styles.bar,
-          dow === 1 && styles.weekBar,
-          firstOfMonth && styles.monthBar,
-          dow === 0 && styles.sundayBar,
+          styles.mini,
+          sunday && styles.miniSunday,
+          firstOfMonth && styles.miniMonth,
+          { opacity, transform: [{ scale }] },
         ]}
-      />
-      {filled && <View style={styles.dot} />}
-      {firstOfMonth && (
-        <Text style={styles.month}>{shortMonth(date)}</Text>
-      )}
+      >
+        <Text style={[styles.miniDate, sunday && styles.miniDateSunday, firstOfMonth && styles.miniMonthText]}>
+          {firstOfMonth ? shortMonth(date) : date.getDate()}
+        </Text>
+        {lineWidths(index).map((w, i) => (
+          <View
+            key={i}
+            style={[
+              styles.miniLine,
+              { width: `${Math.round(w * 100)}%` },
+              filled && styles.miniLineFilled,
+              filled && i === 0 && styles.miniTitle,
+            ]}
+          />
+        ))}
+      </Animated.View>
     </View>
   );
 });
@@ -60,6 +107,7 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
 ) {
   const list = useRef<FlatList<number>>(null);
   const strip = useRef<View>(null);
+  const scrollX = useRef(new Animated.Value(index * PITCH)).current;
   const [stripWidth, setStripWidth] = useState(0);
   // The strip scrolls either because it follows the pager or because the user
   // is scrubbing it. Only a real touch (or wheel, on web) counts as scrubbing;
@@ -73,7 +121,7 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
   useImperativeHandle(ref, () => ({
     follow: (i) => {
       if (scrubbing.current) return;
-      list.current?.scrollToOffset({ offset: i * TICK, animated: false });
+      list.current?.scrollToOffset({ offset: i * PITCH, animated: false });
     },
   }));
 
@@ -82,9 +130,10 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
     idleTimer.current = setTimeout(() => {
       if (touching.current) return;
       scrubbing.current = false;
-      // Rest exactly on the chosen day.
-      list.current?.scrollToOffset({ offset: lastIndex.current * TICK, animated: true });
-    }, 200);
+      // Settle exactly on the chosen day (native snapping already does this;
+      // on web it's the snap).
+      list.current?.scrollToOffset({ offset: lastIndex.current * PITCH, animated: true });
+    }, 160);
   }, []);
 
   const beginScrub = useCallback(() => {
@@ -109,12 +158,12 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
     return () => el?.removeEventListener('wheel', beginScrub);
   }, [beginScrub, stripWidth]);
 
-  const onScroll = useCallback(
+  const onScrollJS = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       if (!scrubbing.current) return;
       armIdle();
       const x = e.nativeEvent.contentOffset.x;
-      const i = Math.max(0, Math.min(DAY_COUNT - 1, Math.round(x / TICK)));
+      const i = Math.max(0, Math.min(DAY_COUNT - 1, Math.round(x / PITCH)));
       if (i !== lastIndex.current) {
         lastIndex.current = i;
         if (Platform.OS !== 'web') Haptics.selectionAsync();
@@ -124,8 +173,18 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
     [onScrub, armIdle],
   );
 
+  const onScrollRef = useRef(onScrollJS);
+  onScrollRef.current = onScrollJS;
+  // Drives the mini-card zoom on the native thread; the listener handles scrubbing.
+  const onScroll = useRef(
+    Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
+      useNativeDriver: Platform.OS !== 'web',
+      listener: (e: NativeSyntheticEvent<NativeScrollEvent>) => onScrollRef.current(e),
+    }),
+  ).current;
+
   const onLayout = (e: LayoutChangeEvent) => setStripWidth(e.nativeEvent.layout.width);
-  const side = Math.max(0, stripWidth / 2 - TICK / 2);
+  const side = Math.max(0, stripWidth / 2 - PITCH / 2);
   const date = dateForIndex(index);
 
   return (
@@ -142,27 +201,28 @@ export const Scrubber = forwardRef<ScrubberHandle, Props>(function Scrubber(
         onTouchCancel={onTouchEnd}
       >
         {stripWidth > 0 && (
-          <FlatList
+          <Animated.FlatList
             ref={list}
             data={DAYS}
             horizontal
             keyExtractor={String}
-            renderItem={({ item }) => <Tick index={item} filled={filledDays.has(dayKey(dateForIndex(item)))} />}
+            renderItem={({ item }) => (
+              <MiniCard index={item} filled={filledDays.has(dayKey(dateForIndex(item)))} scrollX={scrollX} />
+            )}
             extraData={filledDays}
-            getItemLayout={(_, i) => ({ length: TICK, offset: TICK * i, index: i })}
+            getItemLayout={(_, i) => ({ length: PITCH, offset: PITCH * i, index: i })}
             initialScrollIndex={index}
             contentContainerStyle={{ paddingHorizontal: side }}
             showsHorizontalScrollIndicator={false}
-            snapToInterval={TICK}
+            snapToInterval={PITCH}
             decelerationRate="fast"
             onScroll={onScroll}
             onScrollBeginDrag={beginScrub}
             scrollEventThrottle={16}
-            initialNumToRender={60}
-            windowSize={9}
+            initialNumToRender={30}
+            windowSize={7}
           />
         )}
-        <View pointerEvents="none" style={[styles.needle, { left: stripWidth / 2 - 1.5 }]} />
       </View>
     </Glass>
   );
@@ -172,63 +232,54 @@ const styles = StyleSheet.create({
   container: {
     marginHorizontal: 18,
     paddingTop: 8,
-    paddingBottom: 6,
+    paddingBottom: 4,
   },
   label: {
     color: '#fff',
     fontSize: 13,
     fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 2,
     fontVariant: ['tabular-nums'],
   },
   sundayLabel: { color: '#ffb3ad' },
   strip: { height: STRIP_HEIGHT },
-  tick: {
-    width: TICK,
+  slot: {
+    width: PITCH,
     height: STRIP_HEIGHT,
     alignItems: 'center',
-    paddingTop: 6,
-    overflow: 'visible',
+    justifyContent: 'center',
   },
-  bar: {
-    width: 2,
-    height: 10,
+  mini: {
+    width: CARD_W,
+    height: CARD_H,
+    borderRadius: 5,
+    paddingHorizontal: 2.5,
+    paddingTop: 2,
+    gap: 2.5,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  miniSunday: {
+    backgroundColor: 'rgba(255,69,58,0.32)',
+    borderColor: 'rgba(255,140,130,0.6)',
+  },
+  miniMonth: { borderColor: 'rgba(255,255,255,0.85)' },
+  miniDate: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  miniDateSunday: { color: '#ffc2bc' },
+  miniMonthText: { fontSize: 6, letterSpacing: -0.2, marginHorizontal: -1 },
+  miniLine: {
+    height: 2,
     borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.4)',
-    marginTop: 4,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  weekBar: { height: 14, marginTop: 0, backgroundColor: 'rgba(255,255,255,0.7)' },
-  monthBar: { height: 18, marginTop: -2, backgroundColor: '#fff' },
-  sundayBar: { backgroundColor: 'rgba(255,99,88,0.95)' },
-  dot: {
-    position: 'absolute',
-    top: 21,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#64d2ff',
-  },
-  month: {
-    position: 'absolute',
-    top: 27,
-    left: -12,
-    width: 36,
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  needle: {
-    position: 'absolute',
-    top: 0,
-    width: 3,
-    height: 26,
-    borderRadius: 1.5,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOpacity: 0.4,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 0 },
-  },
+  miniLineFilled: { backgroundColor: 'rgba(255,255,255,0.75)' },
+  miniTitle: { height: 2.5, backgroundColor: '#64d2ff' },
 });

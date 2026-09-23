@@ -10,9 +10,10 @@ Built with **Expo SDK 57 / React Native 0.86** (iOS, Android and web).
 ## Features
 
 - **One card per day**: two years back and two years ahead of today. Swipe to page.
-- **Scrubber**: one tick per day. Mondays get a taller tick, Sundays are red, and each
-  month is labelled. A blue dot marks days that have a note. Dragging it moves the
-  cards live, with a haptic tick for each day.
+- **Scrubber**: a strip of mini cards, one per day, like the Photos scrubber. The
+  card under the centre grows, Sundays are red, the 1st of each month shows the
+  month's name, and days with a note look written on. It snaps from card to card
+  and moves the big cards as you drag, with a haptic tick for each day.
 - **Glass**: native Liquid Glass (`expo-glass-effect`) on iOS 26+, with an `expo-blur`
   fallback on older iOS, Android and web.
 - **Keyboard toolbar** (follows the keyboard):
